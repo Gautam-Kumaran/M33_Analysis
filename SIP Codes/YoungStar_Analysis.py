@@ -6,6 +6,8 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
+from scipy.interpolate import interp1d
+from astropy.table import Table
 
 # Load the FITS file
 fits_path = r'c:\Github\M33_Analysis\Tables\m33_vels_stars_inc22B_donedupes.fits'
@@ -44,7 +46,7 @@ beta_prime = beta / np.cos(inc)
 
 r_deproj_arcmin = np.sqrt(alpha**2 + beta_prime**2)
 
-scale = (np.pi/180/60) * 794  # arcmin to kpc
+scale = (np.pi/180/60) * 850  # arcmin to kpc
 
 df['r_deproj_arcmin'] = r_deproj_arcmin
 df['r_deproj_kpc']    = r_deproj_arcmin * scale
@@ -53,18 +55,6 @@ df['r_deproj_kpc']    = r_deproj_arcmin * scale
 xi_deg = xi_arcmin / 60.0
 eta_deg = eta_arcmin / 60.0
 r_deproj_kpc = df['r_deproj_kpc'].values
-
-fig, ax = plt.subplots(figsize=(6, 8))
-sc = ax.scatter(xi_deg, eta_deg, c=r_deproj_kpc, cmap='plasma', s=10, edgecolor='none')
-cbar = plt.colorbar(sc, ax=ax)
-cbar.set_label("Deprojected Radius [kpc]")
-ax.set_xlabel(r'$\xi$ [deg]')
-ax.set_ylabel(r'$\eta$ [deg]')
-ax.set_title("Sky Positions Colored by Deprojected Radius [kpc]")
-ax.set_aspect('equal')
-ax.invert_xaxis()  # Invert the x-axis
-plt.tight_layout()
-plt.show()
 
 
 # 7. Assign age_flag column
@@ -149,5 +139,70 @@ axes[1].set_title('Young Uncertain')
 axes[1].grid(True)
 
 plt.suptitle('Radial Distributions: Young Confirmed vs Young Uncertain (RA ≥ 23.1, DEC ≤ 31.25)')
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.show()
+
+# 5b. Compute Model Velocity and Velocity Offset using Kam et al. (2017)
+diskmodel = Table.read('C:/Github/M33_Analysis/SIP Codes/Kam2017_table4.dat', format='ascii',
+                       names=['Radius_arcmin', 'Radius_kpc', 'Vrot_kms', 'Delta_Vrot', 'i_deg', 'PA_deg'])
+m33coord = SkyCoord(ra='01h33m50.9s', dec='+30d39m36s', unit=(u.hourangle, u.deg))
+v_sys = -180.0
+
+def major_minor_transform(coords, pa, centercoords=m33coord):
+    c_offset = coords.transform_to(centercoords.skyoffset_frame())
+    xi, eta = c_offset.lon.degree, c_offset.lat.degree
+    alpha = eta * np.cos(pa) + xi * np.sin(pa)
+    beta =  - eta * np.sin(pa) + xi * np.cos(pa)
+    return alpha, beta
+
+def compute_model_los_velocity(coords):
+    Rinit = np.sqrt((coords.ra.degree - m33coord.ra.degree)**2 +
+                    (coords.dec.degree - m33coord.dec.degree)**2)
+    R_arcmin = Rinit * 60.0
+    f_pa = interp1d(diskmodel['Radius_arcmin'], diskmodel['PA_deg'], fill_value="extrapolate")
+    f_incl = interp1d(diskmodel['Radius_arcmin'], diskmodel['i_deg'], fill_value="extrapolate")
+    f_vrot = interp1d(diskmodel['Radius_arcmin'], diskmodel['Vrot_kms'], fill_value="extrapolate")
+    pa = f_pa(R_arcmin) * u.deg
+    incl = f_incl(R_arcmin) * u.deg
+    vrot = f_vrot(R_arcmin)
+    alpha, beta = major_minor_transform(coords, pa)
+    phi = np.arctan2(beta / np.cos(incl), alpha)
+    vlos = v_sys + vrot * np.sin(incl) * np.cos(phi)
+    return vlos
+
+coords = SkyCoord(ra=df['RA_DEG'].values*u.deg, dec=df['DEC_DEG'].values*u.deg)
+df['V_model'] = compute_model_los_velocity(coords)
+df['V_offset'] = df['VCORR_STAT'] - df['V_model']
+
+# --- Plot velocity offset histograms for young_confirmed and young_uncertain (with and without RA/DEC cut) ---
+fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
+
+# Young Confirmed
+vc_all = df.loc[df['age_flag'] == 'young_confirmed', 'V_offset']
+vc_cut = df.loc[(df['age_flag'] == 'young_confirmed') & mask_region, 'V_offset']
+axes[0,0].hist(vc_all.clip(-300, 300), bins=40, color='royalblue', alpha=0.7, edgecolor='black', density=True)
+axes[0,0].set_title(f'Young Confirmed (All, N={len(vc_all)})')
+axes[0,0].set_xlabel('Velocity Offset [km/s]')
+axes[0,0].set_ylabel('Probability Density')
+axes[0,0].grid(True, alpha=0.4)
+axes[0,1].hist(vc_cut.clip(-300, 300), bins=40, color='royalblue', alpha=0.7, edgecolor='black', density=True)
+axes[0,1].set_title(f'Young Confirmed (RA≥23.1, DEC≤31.25, N={len(vc_cut)})')
+axes[0,1].set_xlabel('Velocity Offset [km/s]')
+axes[0,1].grid(True, alpha=0.4)
+
+# Young Uncertain
+vu_all = df.loc[df['age_flag'] == 'young_uncertain', 'V_offset']
+vu_cut = df.loc[(df['age_flag'] == 'young_uncertain') & mask_region, 'V_offset']
+axes[1,0].hist(vu_all.clip(-300, 300), bins=40, color='orange', alpha=0.7, edgecolor='black', density=True)
+axes[1,0].set_title(f'Young Uncertain (All, N={len(vu_all)})')
+axes[1,0].set_xlabel('Velocity Offset [km/s]')
+axes[1,0].set_ylabel('Probability Density')
+axes[1,0].grid(True, alpha=0.4)
+axes[1,1].hist(vu_cut.clip(-300, 300), bins=40, color='orange', alpha=0.7, edgecolor='black', density=True)
+axes[1,1].set_title(f'Young Uncertain (RA≥23.1, DEC≤31.25, N={len(vu_cut)})')
+axes[1,1].set_xlabel('Velocity Offset [km/s]')
+axes[1,1].grid(True, alpha=0.4)
+
+plt.suptitle('Velocity Offsets: Young Confirmed & Young Uncertain (All vs. RA/DEC Cut)')
 plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.show()
