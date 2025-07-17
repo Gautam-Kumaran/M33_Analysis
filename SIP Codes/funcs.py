@@ -8,6 +8,11 @@ import astropy.units as u
 from tqdm import tqdm
 from astropy.table import Table
 from scipy.interpolate import interp1d
+from astropy.coordinates import SkyCoord
+
+
+M33_COORD = SkyCoord(ra='01h33m50.9s', dec='+30d39m36s', unit=(u.hourangle, u.deg))
+V_SYS = -180.0  # Systemic velocity of M33 (km/s)
 
 def load_filtered_fits(filepath):
     """
@@ -32,7 +37,7 @@ def report_sel_flag_combinations(df, sel_flags=['RGB_SEL', 'AGB_SEL', 'CBN_SEL',
 def classify_age_groups(df):
     """
     Assigns an 'age_group' column to the DataFrame based on SEL flags,
-    then prints the number of stars in each age group.
+    including 'young_unconfirmed' for OHB and RHB stars.
     """
     df['age_group'] = 'unclassified'
 
@@ -54,10 +59,16 @@ def classify_age_groups(df):
         'age_group'
     ] = 'young'
 
+    df.loc[
+        (df['age_group'] == 'unclassified') & 
+        ((df['OHB_SEL'] == 1) | (df['RHB_SEL'] == 1)),
+        'age_group'
+    ] = 'young_unconfirmed'
+
     print("Number of stars in each age group:")
     print(df['age_group'].value_counts())
     return df
-
+    
 def plot_cmd_panels(df):
     """
     Plots three color-magnitude diagrams (CMDs) for different filter combinations,
@@ -69,14 +80,14 @@ def plot_cmd_panels(df):
     df3 = df[(df['F606W0_ACS'].notnull()) & (df['F814W0_ACS'].notnull())]
 
     # Set color and label mappings
-    colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
-    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old'}
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green'}
+    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old', 'young_unconfirmed': 'young_unconfirmed'}
 
     # Plot CMDs
     fig, axes = plt.subplots(1, 3, figsize=(14, 5), sharey=True)
 
     # Panel 1: g - i vs i
-    for group in ['old', 'int', 'young']:
+    for group in ['old', 'int', 'young', 'young_unconfirmed']:
         subset = df1[df1['age_group'] == group]
         axes[0].scatter(subset['g'] - subset['i'], subset['i'],
                         color=colors[group], s=8, alpha=0.4, label=labels[group])
@@ -87,7 +98,7 @@ def plot_cmd_panels(df):
     axes[0].set_ylabel('i')
 
     # Panel 2: F475W0 - F814W0
-    for group in ['old', 'int', 'young']:
+    for group in ['old', 'int', 'young', 'young_unconfirmed']:
         subset = df2[df2['age_group'] == group]
         axes[1].scatter(subset['F475W0_ACS'] - subset['F814W0_ACS'], subset['F814W0_ACS'],
                         color=colors[group], s=8, alpha=0.4)
@@ -98,7 +109,7 @@ def plot_cmd_panels(df):
     axes[1].set_title('CMD age groups')
 
     # Panel 3: F606W0 - F814W0
-    for group in ['old', 'int', 'young']:
+    for group in ['old', 'int', 'young', 'young_unconfirmed']:
         subset = df3[df3['age_group'] == group]
         axes[2].scatter(subset['F606W0_ACS'] - subset['F814W0_ACS'], subset['F814W0_ACS'],
                         color=colors[group], s=8, alpha=0.4)
@@ -117,8 +128,8 @@ def plot_spatial_age_groups(df):
     Plots RA vs. DEC of stars color-coded by age group on a black background.
     """
     # Define colors and labels
-    colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
-    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old'}
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green'}
+    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old', 'young_unconfirmed': 'young_unconfirmed'}
 
     # Create figure with black background
     plt.figure(figsize=(8, 10), facecolor='black')
@@ -126,7 +137,7 @@ def plot_spatial_age_groups(df):
     ax.set_facecolor('black')
 
     # Scatter plot for each age group
-    for group in ['young', 'int', 'old']:
+    for group in ['old', 'int', 'young', 'young_unconfirmed']:
         subset = df[df['age_group'] == group]
         plt.scatter(subset['RA_DEG'], subset['DEC_DEG'],
                     color=colors[group], s=3, label=labels[group], alpha=0.8)
@@ -141,10 +152,7 @@ def plot_spatial_age_groups(df):
     plt.tight_layout()
     plt.show()
 
-import numpy as np
-import matplotlib.pyplot as plt
-import astropy.units as u
-from astropy.coordinates import SkyCoord
+
 
 def compute_deprojected_radius(df, center_ra=23.4621, center_dec=30.6602, PA_deg=22, inc_deg=52, distance_kpc=850):
     """
@@ -192,11 +200,11 @@ def plot_radial_distribution_by_age(df):
     Parameters:
         df (DataFrame): Must contain 'r_deproj_kpc' and 'age_group' columns.
     """
-    bins = np.arange(0, 25, 0.2)
-    age_groups = ['young', 'int', 'old']
-    colors = {'young': 'blue', 'int': 'yellow', 'old': 'red'}
+    bins = np.arange(0, 35, 0.2)
+    age_groups = ['young', 'int', 'old', 'young_unconfirmed']
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green' }
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(18, 5), sharey=True)
     for ax, group in zip(axes, age_groups):
         subset = df[df['age_group'] == group]
         ax.hist(subset['r_deproj_kpc'], bins=bins, histtype='stepfilled', color=colors[group], alpha=0.7)
@@ -357,8 +365,7 @@ def plot_spatial(df):
     plt.tight_layout()
     plt.show()
 
-M33_COORD = SkyCoord(ra='01h33m50.9s', dec='+30d39m36s', unit=(u.hourangle, u.deg))
-V_SYS = -180.0  # Systemic velocity of M33 (km/s)
+
 
 
 def load_disk_model(diskmodel_path):
@@ -381,6 +388,7 @@ def compute_model_los_velocity(coords, diskmodel):
     """
     Compute model line-of-sight velocities using Kam et al. (2017) rotation curve.
     """
+    
     Rinit = np.sqrt((coords.ra.degree - M33_COORD.ra.degree)**2 +
                     (coords.dec.degree - M33_COORD.dec.degree)**2)
     R_arcmin = Rinit * 60.0
@@ -400,40 +408,6 @@ def compute_model_los_velocity(coords, diskmodel):
     vlos = V_SYS + vrot * np.sin(incl) * np.cos(phi)
     return vlos
 
-# Assumes these utility functions already exist
-def load_disk_model(diskmodel_path):
-    return Table.read(diskmodel_path, format='ascii',
-                      names=['Radius_arcmin', 'Radius_kpc', 'Vrot_kms', 'Delta_Vrot', 'i_deg', 'PA_deg'])
-
-def major_minor_transform(coords, pa):
-    c_offset = coords.transform_to(M33_COORD.skyoffset_frame())
-    xi, eta = c_offset.lon.degree, c_offset.lat.degree
-    alpha = eta * np.cos(pa) + xi * np.sin(pa)
-    beta = -eta * np.sin(pa) + xi * np.cos(pa)
-    return alpha, beta
-
-def compute_model_los_velocity(coords, diskmodel):
-    Rinit = np.sqrt((coords.ra.degree - M33_COORD.ra.degree)**2 +
-                    (coords.dec.degree - M33_COORD.dec.degree)**2)
-    R_arcmin = Rinit * 60.0
-
-    f_pa = interp1d(diskmodel['Radius_arcmin'], diskmodel['PA_deg'], fill_value="extrapolate")
-    f_incl = interp1d(diskmodel['Radius_arcmin'], diskmodel['i_deg'], fill_value="extrapolate")
-    f_vrot = interp1d(diskmodel['Radius_arcmin'], diskmodel['Vrot_kms'], fill_value="extrapolate")
-
-    pa = f_pa(R_arcmin) * u.deg
-    incl = f_incl(R_arcmin) * u.deg
-    vrot = f_vrot(R_arcmin)
-
-    alpha, beta = major_minor_transform(coords, pa)
-    phi = np.arctan2(beta / np.cos(incl), alpha)
-
-    vlos = V_SYS + vrot * np.sin(incl) * np.cos(phi)
-    return vlos
-
-# Global constants
-M33_COORD = SkyCoord(ra='01h33m50.9s', dec='+30d39m36s', unit=(u.hourangle, u.deg))
-V_SYS = -180.0  # Systemic velocity of M33
 
 def generate_summary_with_model_vlos(df, diskmodel_path='./Kam2017_table4.dat'):
     """
@@ -550,11 +524,6 @@ def assign_radial_thirds_equal_count(df, radius_col='r_deproj_kpc'):
 
     return df
     
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-import numpy as np
-import pandas as pd
-from funcs import load_disk_model, compute_model_los_velocity
 
 def generate_radial_third_velocity_summaries(df,
                                              radius_col='r_deproj_kpc',
