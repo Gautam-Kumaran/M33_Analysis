@@ -30,9 +30,9 @@ def elliptical_annulus_area_analytic(a_in_kpc, a_out_kpc, inc_deg):
     inc_rad = np.deg2rad(inc_deg)
     return np.pi * (a_out_kpc**2 - a_in_kpc**2) * np.cos(inc_rad)
 
-def estimate_area_and_plot_annuli(n_points=1_000_000, max_radius_kpc=60,
-                                   distance_kpc=859, PA_deg=22, inc_deg=52,
-                                   area_rings=[], plot_radii_kpc=[]):
+def estimate_area_only(n_points=1_000_000, max_radius_kpc=60,
+                       distance_kpc=859, PA_deg=22, inc_deg=52,
+                       area_rings=[]):
     def kpc_to_arcmin(kpc):
         return np.rad2deg(kpc / distance_kpc) * 60
 
@@ -61,30 +61,10 @@ def estimate_area_and_plot_annuli(n_points=1_000_000, max_radius_kpc=60,
         area_estimate = (n_inside / n_points) * box_area_kpc2
         areas[f"{a_in_kpc}-{a_out_kpc}"] = area_estimate
 
-    fig, ax = plt.subplots(figsize=(7, 7))
-    ax.scatter(xi, eta, s=0.2, alpha=0.3, label='Random Points')
-    for r_kpc in plot_radii_kpc:
-        a = kpc_to_arcmin(r_kpc)
-        b = a * np.cos(inc_rad)
-        color = 'blue' if r_kpc < 40 else 'red'
-        style = '--' if r_kpc % 2 == 0 else '-'
-        ellipse = Ellipse((0, 0), width=2*a, height=2*b, angle=PA_deg,
-                          edgecolor=color, linestyle=style, fill=False, label=f"{r_kpc} kpc")
-        ax.add_patch(ellipse)
-
-    ax.set_xlabel("ξ (arcmin)")
-    ax.set_ylabel("η (arcmin)")
-    ax.set_title("Deprojected Elliptical Annuli with Random Points")
-    ax.set_aspect('equal')
-    ax.legend(loc='upper right')
-    ax.grid(True)
-    plt.tight_layout()
-    plt.show()
-
     return areas
 
 def make_hess(df, bins=(50, 50)):
-    hist, xedges, yedges = np.histogram2d(df['color'], df['mag'], bins=bins)
+    hist, xedges, yedges = np.histogram2d(df['color'], df['mag'], bins=bins, range=[[-1,3],[18,25]])
     return hist
 
 # === Define bins ===
@@ -92,14 +72,14 @@ radial_bins_kpc = [(3, 10), (10, 13), (13, 15), (15, 16)] + [(r, r + 1) for r in
 beyond_bin = (40, 50)
 all_bins = radial_bins_kpc + [beyond_bin]
 
-area_results = estimate_area_and_plot_annuli(
+# === Estimate Areas Only (no plot)
+area_results = estimate_area_only(
     n_points=100_000,
     max_radius_kpc=60,
     distance_kpc=859,
     PA_deg=22,
     inc_deg=52,
-    area_rings=all_bins,
-    plot_radii_kpc=[r for pair in all_bins for r in pair]
+    area_rings=all_bins
 )
 
 # === Print Area Comparison Table with % Difference ===
@@ -127,23 +107,27 @@ for r_in, r_out in radial_bins_kpc:
     hess_scaled_beyond = scale * hess_beyond
     hess_subtracted = hess_m33 - hess_scaled_beyond
 
-    vlim = np.max([np.abs(hess_m33).max(), np.abs(hess_scaled_beyond).max(), np.abs(hess_subtracted).max()])
+    vlim = np.percentile(np.abs(hess_m33),99)
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
-    im0 = axes[0].imshow(hess_m33.T, origin='lower', aspect='auto',
-                         extent=[-1, 3, 18, 25], cmap='viridis', norm=LogNorm(vmax=vlim))
+
+    # Raw M33
+    im0 = axes[0].imshow(hess_m33.T, origin='upper', aspect='auto',
+                         extent=[-1, 3, 18, 25], cmap='viridis',vmin=0, vmax=vlim)
     axes[0].set_title(f"M33 Hess: {label}")
     axes[0].set_xlabel('g - i')
     axes[0].set_ylabel('i magnitude')
     fig.colorbar(im0, ax=axes[0])
 
-    im1 = axes[1].imshow(hess_scaled_beyond.T, origin='lower', aspect='auto',
-                         extent=[-1, 3, 18, 25], cmap='viridis', norm=LogNorm(vmax=vlim))
+    # Scaled Beyond
+    im1 = axes[1].imshow(hess_scaled_beyond.T, origin='upper', aspect='auto',
+                         extent=[-1, 3, 18, 25], cmap='viridis',vmin=0, vmax=vlim)
     axes[1].set_title("Scaled Beyond Hess")
     axes[1].set_xlabel('g - i')
     fig.colorbar(im1, ax=axes[1])
 
-    im2 = axes[2].imshow(hess_subtracted.T, origin='lower', aspect='auto',
+    # Subtracted Map — Linear scale only
+    im2 = axes[2].imshow(hess_subtracted.T, origin='upper', aspect='auto',
                          extent=[-1, 3, 18, 25], cmap='RdBu_r',
                          vmin=-vlim, vmax=vlim)
     axes[2].set_title("Subtracted Hess")
