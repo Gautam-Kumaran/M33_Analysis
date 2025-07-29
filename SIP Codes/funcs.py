@@ -21,7 +21,7 @@ def load_filtered_fits(filepath):
     with fits.open(filepath) as hdul:
         data = hdul[1].data.astype(hdul[1].data.dtype.newbyteorder('='))
         return pd.DataFrame(data).query("FG_SEL != 1").copy()
-
+        
 def report_sel_flag_combinations(df, sel_flags=['RGB_SEL', 'AGB_SEL', 'CBN_SEL', 'YMS_SEL', 'WCN_SEL', 'RHB_SEL', 'OHB_SEL', 'FG_SEL']):
     """
     Analyze and print the number of stars for each unique combination of SEL flags in the DataFrame.
@@ -33,6 +33,20 @@ def report_sel_flag_combinations(df, sel_flags=['RGB_SEL', 'AGB_SEL', 'CBN_SEL',
     for combo, count in combo_counts.items():
         label = ', '.join(combo) if combo else 'None'
         print(f"{label}: {count}")
+
+def remove_high_vcorr_stars(df, threshold=1000, verbose=True):
+    """
+    Identifies and optionally removes stars with VCORR_STAT above a given threshold.
+    """
+    high_vcorr = df[df['VCORR_STAT'] > threshold]
+    
+    if verbose and not high_vcorr.empty:
+        print(f"Stars with VCORR_STAT > {threshold}:")
+        print(high_vcorr[['RA_DEG', 'DEC_DEG', 'VCORR_STAT']])
+
+    cleaned_df = df[df['VCORR_STAT'] <= threshold].copy()
+    return cleaned_df
+
 
 def classify_age_groups(df):
     """
@@ -154,7 +168,7 @@ def plot_spatial_age_groups(df):
 
 
 
-def compute_deprojected_radius(df, center_ra=23.4621, center_dec=30.6602, PA_deg=22, inc_deg=52, distance_kpc=850):
+def compute_deprojected_radius(df, center_ra=23.4621, center_dec=30.6602, PA_deg=22, inc_deg=52, distance_kpc=859):
     """
     Computes deprojected galactocentric radii for stars in M33.
 
