@@ -23,13 +23,29 @@ from tqdm import tqdm
 M33_COORD = SkyCoord(ra='01h33m50.9s', dec='+30d39m36s', unit=(u.hourangle, u.deg))
 V_SYS = -180.0  # Systemic velocity of M33 (km/s)
 
-def load_filtered_fits(filepath):
+import pandas as pd
+from astropy.io import fits
+
+def load_filtered_fits(filepath, badindex_path="./BadIndex.csv"):
     """
-    Load a FITS file into a pandas DataFrame and remove foreground stars (FG_SEL == 1).
+    Load a FITS file into a pandas DataFrame, remove foreground stars (FG_SEL == 1),
+    and exclude rows whose indices are listed in BadIndex.csv.
     """
+    # Load FITS and remove foreground stars
     with fits.open(filepath) as hdul:
         data = hdul[1].data.astype(hdul[1].data.dtype.newbyteorder('='))
-        return pd.DataFrame(data).query("FG_SEL != 1").copy()
+        df = pd.DataFrame(data).query("FG_SEL != 1").copy()
+
+    # Load BadIndex.csv (if it exists) and drop those rows
+    try:
+        badindex = pd.read_csv(badindex_path)['BadIndex'].values
+        df = df.drop(index=badindex, errors='ignore')
+    except FileNotFoundError:
+        print(f"Warning: {badindex_path} not found. Skipping BadIndex removal.")
+
+    return df
+
+
         
 def report_sel_flag_combinations(df, sel_flags=['RGB_SEL', 'AGB_SEL', 'CBN_SEL', 'YMS_SEL', 'WCN_SEL', 'RHB_SEL', 'OHB_SEL', 'FG_SEL']):
     """
@@ -59,8 +75,8 @@ def remove_high_vcorr_stars(df, threshold=1000, verbose=True):
 
 def classify_age_groups(df):
     """
-    Assigns an 'age_group' column to the DataFrame based on SEL flags,
-    including 'young_unconfirmed' for OHB and RHB stars.
+    Assigns an 'age_group' column to the DataFrame based on SEL flags.
+    OHB, RHB, and YMS stars are classified as 'young'.
     """
     df['age_group'] = 'unclassified'
 
@@ -77,37 +93,37 @@ def classify_age_groups(df):
         'age_group'
     ] = 'int'
 
+    # Combine YMS, OHB, RHB into young
     df.loc[
-        (df['age_group'] == 'unclassified') & (df['YMS_SEL'] == 1),
+        (df['age_group'] == 'unclassified') & (
+            (df['YMS_SEL'] == 1) | (df['OHB_SEL'] == 1) | (df['RHB_SEL'] == 1)
+        ),
         'age_group'
     ] = 'young'
-
-    df.loc[
-        (df['age_group'] == 'unclassified') & 
-        ((df['OHB_SEL'] == 1) | (df['RHB_SEL'] == 1)),
-        'age_group'
-    ] = 'young_unconfirmed'
 
     print("Number of stars in each age group:")
     print(df['age_group'].value_counts())
     return df
-    
+
 def plot_cmd_panels(df):
     """
     Plots three color-magnitude diagrams (CMDs) for different filter combinations,
     colored by stellar age group.
+    Each panel has its own legend.
     """
+    import matplotlib.pyplot as plt
+
     # Filter data by magnitude availability
     df1 = df[(df['g'].notnull()) & (df['i'].notnull())]
     df2 = df[(df['F475W0_ACS'].notnull()) & (df['F814W0_ACS'].notnull())]
     df3 = df[(df['F606W0_ACS'].notnull()) & (df['F814W0_ACS'].notnull())]
 
     # Set color and label mappings
-    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green'}
-    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old', 'young_unconfirmed': 'young_unconfirmed'}
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
+    labels = {'young': 'Young', 'int': 'Intermediate', 'old': 'Old'}
 
     # Plot CMDs
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5), sharey=False)
 
     # Panel 1: g - i vs i
     for group in ['old', 'int', 'young']:
@@ -119,30 +135,31 @@ def plot_cmd_panels(df):
     axes[0].set_ylim(24, 16)
     axes[0].set_xlabel('g - i')
     axes[0].set_ylabel('i')
+    axes[0].legend(title='Age Group')
 
     # Panel 2: F475W0 - F814W0
-    for group in ['old', 'int', 'young', 'young_unconfirmed']:
+    for group in ['old', 'int', 'young']:
         subset = df2[df2['age_group'] == group]
         axes[1].scatter(subset['F475W0_ACS'] - subset['F814W0_ACS'], subset['F814W0_ACS'],
-                        color=colors[group], s=8, alpha=0.4)
+                        color=colors[group], s=8, alpha=0.4, label=labels[group])
     axes[1].invert_yaxis()
     axes[1].set_xlim(-1, 5)
     axes[1].set_ylim(24, 16)
     axes[1].set_xlabel('F475W$_0$ - F814W$_0$')
     axes[1].set_title('CMD age groups')
+    axes[1].legend(title='Age Group')
 
     # Panel 3: F606W0 - F814W0
-    for group in ['old', 'int', 'young', 'young_unconfirmed']:
+    for group in ['old', 'int', 'young']:
         subset = df3[df3['age_group'] == group]
         axes[2].scatter(subset['F606W0_ACS'] - subset['F814W0_ACS'], subset['F814W0_ACS'],
-                        color=colors[group], s=8, alpha=0.4)
+                        color=colors[group], s=8, alpha=0.4, label=labels[group])
     axes[2].invert_yaxis()
     axes[2].set_xlim(-1, 3)
     axes[2].set_ylim(24, 16)
     axes[2].set_xlabel('F606W$_0$ - F814W$_0$')
+    axes[2].legend(title='Age Group')
 
-    # Add unified legend
-    fig.legend(*axes[0].get_legend_handles_labels(), loc='upper center', ncol=3)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
     
@@ -151,8 +168,8 @@ def plot_spatial_age_groups(df):
     Plots RA vs. DEC of stars color-coded by age group on a black background.
     """
     # Define colors and labels
-    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green'}
-    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old', 'young_unconfirmed': 'young_unconfirmed'}
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
+    labels = {'young': 'young', 'int': 'intermediate', 'old': 'old'}
 
     # Create figure with black background
     plt.figure(figsize=(8, 10), facecolor='black')
@@ -160,7 +177,7 @@ def plot_spatial_age_groups(df):
     ax.set_facecolor('black')
 
     # Scatter plot for each age group
-    for group in ['old', 'int', 'young', 'young_unconfirmed']:
+    for group in ['old', 'int', 'young']:
         subset = df[df['age_group'] == group]
         plt.scatter(subset['RA_DEG'], subset['DEC_DEG'],
                     color=colors[group], s=3, label=labels[group], alpha=0.8)
@@ -249,8 +266,8 @@ def plot_radial_distribution_by_age(df):
         df (DataFrame): Must contain 'r_deproj_kpc' and 'age_group' columns.
     """
     bins = np.arange(0, 35, 0.2)
-    age_groups = ['young', 'int', 'old', 'young_unconfirmed']
-    colors = {'young': 'blue', 'int': 'orange', 'old': 'red', 'young_unconfirmed': 'green' }
+    age_groups = ['young', 'int', 'old']
+    colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
 
     fig, axes = plt.subplots(1, 4, figsize=(18, 5), sharey=True)
     for ax, group in zip(axes, age_groups):
@@ -553,38 +570,28 @@ def assign_radial_thirds_equal_count(df, radius_col='r_deproj_kpc'):
 
     
 
-def generate_radial_third_summary_df(df, 
-                                     radius_col='r_deproj_kpc',
-                                     diskmodel_path='./Kam2017_table4.dat'):
-    """
-    For each radial_third ('inner','middle','outer'), create a summary DataFrame
-    with columns for each age group (like triplet summary: side-by-side columns).
-    Returns: dict with keys 'inner', 'middle', 'outer', each with a DataFrame
-    """
+def generate_radial_third_agegroup_dfs(
+    df, 
+    radius_col='r_deproj_kpc',
+    diskmodel_path='./Kam2017_table4.dat'
+):
     diskmodel = load_disk_model(diskmodel_path)
     coords = SkyCoord(ra=df['RA_DEG'].values * u.deg,
                       dec=df['DEC_DEG'].values * u.deg)
     work = df.copy()
     work['model_vlos'] = compute_model_los_velocity(coords, diskmodel)
     work['voffset']    = work['VCORR_STAT'] - work['model_vlos']
-
+    radial_thirds = ['inner', 'middle', 'outer']
+    age_groups = ['young', 'int', 'old']
     out = {}
-    for thr in ['inner','middle','outer']:
-        sub = work[work['radial_third'] == thr].copy()
-        # List of age groups
-        age_groups = ['young','int','old']
-        # Merge by index (row) for each group
-        dfs = []
+    for thr in radial_thirds:
         for age in age_groups:
-            temp = sub[sub['age_group'] == age].copy()
-            # Only these columns, renamed to match group
-            temp = temp[['RA_DEG','DEC_DEG','model_vlos','VCORR_STAT','voffset']]
+            mask = (work['radial_third'] == thr) & (work['age_group'] == age)
+            temp = work.loc[mask, ['RA_DEG', 'DEC_DEG', 'model_vlos', 'VCORR_STAT', 'voffset']].copy()
             temp.columns = [f'{age}_RA', f'{age}_DEC', f'{age}_vlos', f'{age}_vcorr_stat', f'{age}_voffset']
             temp = temp.reset_index(drop=True)
-            dfs.append(temp)
-        # Merge all, aligning by row index (pad with NaN if not same size)
-        merged = pd.concat(dfs, axis=1)
-        out[thr] = merged
+            key = f"{thr}_{age}"
+            out[key] = temp
     return out
 
 
