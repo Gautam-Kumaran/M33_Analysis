@@ -28,23 +28,26 @@ from astropy.io import fits
 
 def load_filtered_fits(filepath, badindex_path="./BadIndex.csv"):
     """
-    Load a FITS file into a pandas DataFrame, remove foreground stars (FG_SEL == 1),
-    and exclude rows whose indices are listed in BadIndex.csv.
+    Load a FITS file into a pandas DataFrame, remove BadIndex stars
+    (defined on the original indexing), then remove foreground stars.
     """
-    # Load FITS and remove foreground stars
-    with fits.open(filepath) as hdul:
-        data = hdul[1].data.astype(hdul[1].data.dtype.newbyteorder('='))
-        df = pd.DataFrame(data).query("FG_SEL != 1").copy()
 
-    # Load BadIndex.csv (if it exists) and drop those rows
+    # Load FITS
+    with fits.open(filepath) as hdul:
+        data = hdul[1].data.astype(hdul[1].data.dtype.newbyteorder("="))
+        df = pd.DataFrame(data)
+
+    # Drop BadIndex first (indices match original FITS rows)
     try:
-        badindex = pd.read_csv(badindex_path)['BadIndex'].values
-        df = df.drop(index=badindex, errors='ignore')
+        badindex = pd.read_csv(badindex_path)["BadIndex"].values
+        df = df.drop(index=badindex, errors="ignore")
     except FileNotFoundError:
         print(f"Warning: {badindex_path} not found. Skipping BadIndex removal.")
 
-    return df
+    # Now remove foreground stars
+    df = df.query("FG_SEL != 1").copy()
 
+    return df
 
         
 def report_sel_flag_combinations(df, sel_flags=['RGB_SEL', 'AGB_SEL', 'CBN_SEL', 'YMS_SEL', 'WCN_SEL', 'RHB_SEL', 'OHB_SEL', 'FG_SEL']):
@@ -396,13 +399,16 @@ def match_doubles(df, match_radius_arcmin=1.0):
 
     return pair_full_data[pair_full_data['RA_DEG'].notnull() & pair_full_data['DEC_DEG'].notnull()]
 
-def plot_spatial(df):
+def plot_spatial(df, outfile="spatial_distribution_matched_stars.png", dpi=300):
     """
-    Plots RA vs DEC of matched stars on a black background, grouped by 'group' column.
+    Plots RA vs DEC of matched stars on a black background, grouped by 'group' column,
+    and saves the figure to disk.
 
     Parameters:
         df (DataFrame): Must contain 'RA_DEG', 'DEC_DEG', and 'group' columns.
                         Supports any combination of 'young', 'int', and 'old'.
+        outfile (str): Path/filename for the saved image.
+        dpi (int): Resolution of the saved figure.
     """
     colors = {'young': 'blue', 'int': 'orange', 'old': 'red'}
     labels = {'young': 'young', 'int': 'intermediate', 'old': 'old'}
@@ -416,8 +422,14 @@ def plot_spatial(df):
     for group in ['young', 'int', 'old']:
         if group in groups_present:
             subset = df[df['group'] == group]
-            plt.scatter(subset['RA_DEG'], subset['DEC_DEG'],
-                        color=colors[group], s=5, label=labels[group], alpha=0.8)
+            plt.scatter(
+                subset['RA_DEG'],
+                subset['DEC_DEG'],
+                color=colors[group],
+                s=5,
+                label=labels[group],
+                alpha=0.8
+            )
 
     plt.xlabel("RA (degrees)", color='white')
     plt.ylabel("DEC (degrees)", color='white')
@@ -425,9 +437,19 @@ def plot_spatial(df):
     plt.ylim(30, 31.75)
     plt.tick_params(colors='white')
     ax.invert_xaxis()
-    plt.legend(loc='lower center', ncol=len(groups_present), bbox_to_anchor=(0.5, -0.05))
+
+    plt.legend(
+        loc='lower center',
+        ncol=len(groups_present),
+        bbox_to_anchor=(0.5, -0.05)
+    )
+
     plt.title("Spatial Distribution of Matched Stars", color='white')
     plt.tight_layout()
+
+    # --- SAVE FIGURE ---
+    plt.savefig(outfile, dpi=dpi, facecolor='black', bbox_inches='tight')
+
     plt.show()
 
 

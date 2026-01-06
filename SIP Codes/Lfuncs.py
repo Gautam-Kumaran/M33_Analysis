@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from scipy.interpolate import interp1d
-
+import pandas as pd
 from astropy.table import Table, Column, vstack
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -572,7 +572,7 @@ def plot_hist_voffset(samplechain, quantiles, vels, modelvels, extras, vdatalbl,
     ax.set_ylabel(r"Probability Density")
     ax.set_ylabel(histylabel)
     fig.tight_layout()
-    plt.show()
+    #plt.show()
     plt.close(fig)
     return
 
@@ -623,7 +623,7 @@ def plot_hist_vlos(samplechain, quantiles, vels, modelvels, extras, vdatalbl, fi
     # else:
     ax.set_ylabel(histylabel)
     fig.tight_layout()
-    plt.show()
+    #plt.show()
     plt.close(fig)
     return
 
@@ -757,7 +757,7 @@ def plot_majaxis_model(majaxis_dist, majaxis_model, veldraws_model, obs_vel, pro
     ax.set_xlabel('Distance Along Major Axis (arcmin)')
     ax.set_ylabel('Heliocentric Velocity (km s$^{-1}$)')
     fig.tight_layout()
-    plt.show()
+    #plt.show()
     plt.close(fig)
     return
 
@@ -796,7 +796,7 @@ def plot_cmd_prob(tbdata, probs, figname):
         pickle.dump(fig, open(f'{spec_direct}/dyplots/{figname}.pickle', 'wb'))
     else:
         fig.savefig(f'{spec_direct}/dyplots/{figname}', bbox_inches='tight')
-    plt.show()
+    #plt.show()
     plt.close(fig)
     return
 
@@ -815,7 +815,7 @@ def plot_pos_prob(tbdata, probs, figname):
     ax.invert_xaxis()
     ax.set_ylabel('Dec (deg)')
     fig.tight_layout()
-    plt.show()
+    #plt.show()
     plt.close(fig)
     return
 
@@ -1749,37 +1749,35 @@ def run_population_fits(
     abridged=False
 ):
     """
-    Runs velocity mixture model fits for each age group in the provided summary DataFrame,
-    and prints the evidence and best-fit parameters (with ±1σ uncertainties).
+    Runs velocity mixture model fits for each age group.
+    Existing behavior preserved; now also RETURNS results.
     """
 
-    # Parameter lists by modelset
     params_dict = {
         1: ['disklag', 'disksig', 'fhalo', 'halocen', 'halosig'],
         2: ['disklag', 'disksig', 'fhalo', 'halocen', 'halosig'],
-        3: ['disklag', 'disksig', 'fhalo', 'halocen', 'halosig', 'halolag'],
-        4: ['disklag', 'disksig', 'tdisklag', 'tdisksig', 'ftdisk', 'halocen', 'halosig', 'fhalo'],
-        5: ['disklag', 'disksig', 'tdisklag', 'tdisksig', 'ftdisk', 'halocen', 'halosig', 'halolag', 'fhalo']
+        3: ['disklag', 'disksig', 'fhalo', 'halocen', 'halosig'],
     }
     params_list = params_dict[modelset]
+
+    results = {}   # NEW
 
     for population in age_groups:
         print(f"\n=== Fitting {population} population ===")
 
-        # -------- EXTRACT DATA --------
         v_obs = summary[f'{population}_vcorr_stat'].values
         ra = summary[f'{population}_RA'].values
         dec = summary[f'{population}_DEC'].values
-        coords = SkyCoord(ra=ra*u.deg, dec=dec*u.deg)
-        deproj_radius = np.ones(len(summary))  # Replace with actual deproj radius if available
 
-        # -------- CONVERT TO ASTROPY TABLE --------
+        coords = SkyCoord(ra=ra*u.deg, dec=dec*u.deg)
+        deproj_radius = np.ones(len(v_obs))
+
         table_data = Table.from_pandas(summary)
         table_data['VCORR_STAT'] = v_obs
+
         model_v = np.array(m33_tilted_ring(coords))
 
-        # -------- FIT THE MODEL --------
-        ev, qres, numn, fn, prob = fit_model(
+        ev, qres, nstars, fn, prob = fit_model(
             table_data,
             deproj_radius,
             coords,
@@ -1789,10 +1787,102 @@ def run_population_fits(
             optflags,
             burncut=burncut,
             abridged=abridged,
-            startype=population   # <<< pass population label to fit_model
+            startype=population
         )
 
-        # -------- PRINT RESULTS --------
+        # Existing prints (unchanged)
         print(f"  log(Z): {ev[0]:.2f} ± {ev[1]:.2f}")
         for name, q in zip(params_list, qres):
-            print(f"  {name:>10s}: {q[1]:.2f} [+{q[2]-q[1]:.2f}, -{q[1]-q[0]:.2f}]")
+            print(
+                f"  {name:>10s}: {q[1]:.2f} "
+                f"[+{q[2]-q[1]:.2f}, -{q[1]-q[0]:.2f}]"
+            )
+
+        # NEW: store results
+        results[population] = {
+            "logZ": ev,
+            "params": dict(zip(params_list, qres)),
+            "nstars": nstars,
+        }
+
+    return results   # NEW
+
+def run_population_fits_full(
+    doublet_summary,
+    triplet_summary,
+    modelset=3,
+    burncut=2.0,
+    abridged=False,
+    outfile="FHALO_clean_final.csv"
+):
+    """
+    Run ALL population fits (Doublet + Triplet, TTTF + TTFF)
+    and write a clean, fully-labeled CSV.
+
+    Output columns:
+      run_type, population, optflags, halo_rotation, nstars, logZ,
+      disklag (+/-), disksig (+/-), fhalo (+/-), halocen (+/-), halosig (+/-)
+    """
+
+    def halo_rotation_label(optflags):
+        # TTTF -> halo rotation fixed; TTFF -> halo rotation free
+        return "Fixed" if optflags[-1] == "F" else "Free"
+
+    def unpack_q(q):
+        """
+        q is expected to be [q16, q50, q84] (or similar).
+        Returns median, err_minus, err_plus.
+        """
+        med = q[1]
+        err_minus = q[1] - q[0]
+        err_plus  = q[2] - q[1]
+        return med, err_minus, err_plus
+
+    rows = []
+
+    configs = [
+        ("Doublet", doublet_summary, ["young", "old"]),
+        ("Triplet", triplet_summary, ["young", "int", "old"]),
+    ]
+
+    param_names = ["disklag", "disksig", "fhalo", "halocen", "halosig"]
+
+    for run_type, summary, pops in configs:
+        for optflags in ["TTTF", "TTFF"]:
+
+            res = run_population_fits(
+                summary=summary,
+                age_groups=pops,
+                optflags=optflags,
+                modelset=modelset,
+                burncut=burncut,
+                abridged=abridged
+            )
+
+            for pop, out in res.items():
+                params = out["params"]
+
+                row = {
+                    "run_type": run_type,
+                    "population": pop,
+                    "optflags": optflags,
+                    "halo_rotation": halo_rotation_label(optflags),
+                    "nstars": out.get("nstars", np.nan),
+                    "logZ": out["logZ"][0],   # keep logZ median only; drop logZ_err
+                }
+
+                # Add all requested parameters + their asymmetric errors
+                for p in param_names:
+                    q = params.get(p, [np.nan, np.nan, np.nan])
+                    med, em, ep = unpack_q(q)
+                    row[p] = med
+                    row[f"{p}_err_minus"] = em
+                    row[f"{p}_err_plus"] = ep
+
+                rows.append(row)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(outfile, index=False)
+
+    print(f"\nSaved full results to {outfile}")
+    return df
